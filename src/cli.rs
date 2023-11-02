@@ -20,7 +20,7 @@ use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, Us
 use lightning::util::persist::KVStore;
 use lightning::util::ser::{Writeable, Writer};
 use lightning_invoice::payment::pay_invoice;
-use lightning_invoice::{utils, Bolt11Invoice, Currency};
+use lightning_invoice::{utils, Bolt11Invoice, Currency, SignOrCreationError, CreationError, Bolt11InvoiceDescription, Description};
 use lightning_persister::fs_store::FilesystemStore;
 use std::env;
 use std::io;
@@ -211,6 +211,48 @@ pub(crate) fn poll_for_user_input(
 						&mut outbound_payments.lock().unwrap(),
 						Arc::clone(&fs_store),
 					);
+				}
+				"getinvoicewithhash" => {
+					let amt_str = words.next();
+					if amt_str.is_none() {
+						println!("ERROR: getinvoice requires an amount in millisatoshis");
+						continue;
+					}
+
+					let amt_msat: Result<u64, _> = amt_str.unwrap().parse();
+					if amt_msat.is_err() {
+						println!("ERROR: getinvoice provided payment amount was not a number");
+						continue;
+					}
+
+					let hash_str = words.next();
+					if hash_str.is_none() {
+						println!("ERROR: missing payment hash");
+						continue;
+					}
+					let hash_vec = hex_utils::to_vec(hash_str.unwrap());
+					if hash_vec.is_none() || hash_vec.as_ref().unwrap().len() != 32 {
+						println!("ERROR: invalid payment hash");
+						continue;
+					}
+					let mut payment_hash = [0; 32];
+					payment_hash.copy_from_slice(&hash_vec.unwrap());
+					let payment_hash = PaymentHash(payment_hash);
+
+					let mut inbound_payments = inbound_payments.lock().unwrap();
+					get_invoice_from_hash(
+						amt_msat.unwrap(),
+						&mut inbound_payments,
+						&channel_manager,
+						Arc::clone(&keys_manager),
+						network,
+						3600,
+						Arc::clone(&logger),
+						payment_hash,
+					);
+					fs_store
+						.write("", "", INBOUND_PAYMENTS_FNAME, &inbound_payments.encode())
+						.unwrap();
 				}
 				"getinvoice" => {
 					let amt_str = words.next();
@@ -774,6 +816,61 @@ fn get_invoice(
 		Some(amt_msat),
 		"ldk-tutorial-node".to_string(),
 		expiry_secs,
+		None,
+	) {
+		Ok(inv) => {
+			println!("SUCCESS: generated invoice: {}", inv);
+			inv
+		}
+		Err(e) => {
+			println!("ERROR: failed to create invoice: {:?}", e);
+			return;
+		}
+	};
+
+	let payment_hash = PaymentHash(invoice.payment_hash().clone().into_inner());
+	inbound_payments.payments.insert(
+		payment_hash,
+		PaymentInfo {
+			preimage: None,
+			secret: Some(invoice.payment_secret().clone()),
+			status: HTLCStatus::Pending,
+			amt_msat: MillisatAmount(Some(amt_msat)),
+		},
+	);
+}
+
+fn get_invoice_from_hash(
+	amt_msat: u64, inbound_payments: &mut PaymentInfoStorage, channel_manager: &ChannelManager,
+	keys_manager: Arc<KeysManager>, network: Network, expiry_secs: u32,
+	logger: Arc<disk::FilesystemLogger>, payment_hash: PaymentHash,
+) {
+	let currency = match network {
+		Network::Bitcoin => Currency::Bitcoin,
+		Network::Testnet => Currency::BitcoinTestnet,
+		Network::Regtest => Currency::Regtest,
+		Network::Signet => Currency::Signet,
+	};
+	let duration = std::time::SystemTime::now()
+		.duration_since(std::time::SystemTime::UNIX_EPOCH)
+		.expect("for the foreseeable future this shouldn't happen");
+	let payment_secret = channel_manager
+		.create_inbound_payment_for_hash(payment_hash, Some(amt_msat), expiry_secs,
+			None)
+			.unwrap();
+	let invoice = match utils::_create_invoice_from_channelmanager_and_duration_since_epoch_with_payment_hash(
+		channel_manager,
+		keys_manager,
+		logger,
+		currency,
+		Some(amt_msat),
+		Bolt11InvoiceDescription::Direct(
+			&Description::new("split payment".to_string()).unwrap(),
+		),
+		duration,
+		expiry_secs,
+		payment_hash,
+		payment_secret,
 		None,
 	) {
 		Ok(inv) => {

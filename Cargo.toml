@@ -28,6 +28,10 @@ rand = "0.4"
 serde_json = { version = "1.0" }
 tokio = { version = "1", features = [ "io-util", "macros", "rt", "rt-multi-thread", "sync", "net", "time" ] }
 
+[patch.crates-io]
+lightning = { git = "https://github.com/afilini/rust-lightning.git", rev = "c76807a461bd7c599bddbfba1e7bad8b2a2c589a" }
+lightning-invoice = { git = "https://github.com/afilini/rust-lightning.git", rev = "c76807a461bd7c599bddbfba1e7bad8b2a2c589a" }
+
 [profile.release]
 panic = "abort"
 

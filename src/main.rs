@@ -244,7 +244,12 @@ async fn handle_ldk_events(
 				PaymentPurpose::InvoicePayment { payment_preimage, .. } => payment_preimage,
 				PaymentPurpose::SpontaneousPayment(preimage) => Some(preimage),
 			};
-			channel_manager.claim_funds(payment_preimage.unwrap());
+			match payment_preimage {
+				Some(preimage) => channel_manager.claim_funds(preimage),
+				None => {
+					println!("\n\t...unknown preimage");
+				}
+			}
 		}
 		Event::PaymentClaimed {
 			payment_hash,
@@ -307,6 +312,7 @@ async fn handle_ldk_events(
 					io::stdout().flush().unwrap();
 				}
 			}
+			channel_manager.claim_funds(payment_preimage);
 			fs_store.write("", "", OUTBOUND_PAYMENTS_FNAME, &outbound.encode()).unwrap();
 		}
 		Event::OpenChannelRequest {
